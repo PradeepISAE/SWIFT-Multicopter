@@ -231,3 +231,29 @@ Use them to select real hardware in R1–R5; then R7 re-converges MTOW.
               white-space:nowrap;flex-shrink:0;">{label}</div>
   <div style="color:#374151;font-size:0.85rem;padding-top:4px;">{desc}</div>
 </div>""", unsafe_allow_html=True)
+
+    # ── Key equations summary ─────────────────────────────────────────────────
+    st.markdown("---")
+    with st.expander("Key Equations — All Resizing Phases"):
+        st.markdown("**Arm length & root bending moment**")
+        st.latex(r"L_{arm} = k_{arm} \cdot \frac{D_{prop}}{2}, \quad M_{root} = \frac{MTOW \cdot g \cdot k_{TO}}{n} \cdot L_{arm}")
+        st.markdown("**Structural inverse solve (circular tube)**")
+        st.latex(r"d_{out} = \left(\frac{32\,M_{root}\,FoS}{\pi\,\sigma_{allow}\,(1 - k_{ratio}^4)}\right)^{1/3}")
+        st.markdown("**Power loading & motor power**")
+        st.latex(r"PL_{50\%} = \frac{T_{50\%}}{P_{50\%}} \quad [g/W], \qquad P_{motor} = \frac{MTOW_g}{PL_{50\%} \cdot n}")
+        st.markdown("**Mission energy**")
+        st.latex(r"E_{total} = \sum_k P_k \cdot t_k + E_{cruise} \quad \text{[Wh]}")
+        st.markdown("**Battery sizing**")
+        st.latex(r"M_{batt} = \frac{E_{total}}{SED \cdot DoD \cdot \eta}, \quad C_{target} = 1.15 \times \frac{E_{total} \times 1000}{V_{batt}}")
+        st.markdown("**Cruise aerodynamics (Tyan 2017)**")
+        st.latex(r"FM = 0.4742\,T^{0.0793},\quad v_i = \sqrt{\frac{F}{2\rho A_{disk}}},\quad P_{cruise} = n\,\frac{F\,v_i}{FM} + P_{avi} + P_{pay}")
+        st.markdown("**Convergence loop**")
+        st.latex(r"MTOW_{k+1} = m_{pay} + M_{avi} + M_{prop} + M_{struct}(k) + M_{batt}(k) \quad \text{until } |\Delta MTOW| < \varepsilon")
+        st.markdown("**SLSQP optimisation**")
+        st.latex(r"\min_{k_{arm},k_{ratio}} MTOW \;\text{ s.t. }\; g_1,g_2,g_3,g_4 \geq 0")
+        st.caption(
+            "Primary references: "
+            "Pollet (2024) 'Contribution to the Preliminary Design of Multirotor UAVs' PhD Thesis; "
+            "Tyan et al. (2017) 'An Improved Preliminary Sizing Method and Sensitivity Analysis "
+            "for a Multirotor UAV', KSAS."
+        )

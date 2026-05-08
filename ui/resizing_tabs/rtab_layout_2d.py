@@ -80,6 +80,20 @@ def render():
 
         # ── Reference areas ───────────────────────────────────────────────────
         st.markdown("**Reference Areas**")
+        with st.expander("Equations & References"):
+            st.markdown("**Top-view (hover/drag) reference area**")
+            st.latex(r"S_{top} = n_m \pi R_{prop}^2 + n_m L_{arm} \cdot d_{out} + \pi r_{body}^2")
+            st.markdown("**Frontal (cruise drag) reference area**")
+            st.latex(r"S_{front} = n_m D_{prop} \cdot d_{out} + D_{body} \cdot \bar{h}_{body}")
+            st.markdown("**Arm length and propeller span**")
+            st.latex(r"L_{arm} = k_{arm} \cdot \frac{D_{prop}}{2}")
+            st.latex(r"\mathrm{Span} = 2\,L_{arm} + D_{prop}")
+            st.markdown("**Propeller tip clearance**")
+            st.latex(r"d_{between} = 2\,L_{arm}\,\sin\!\left(\frac{\pi}{n_m}\right) > D_{prop} + c_{margin}")
+            st.caption(
+                "R_prop = D_prop/2; d_out = arm outer diameter from R4 · Structure. "
+                "References: Pollet (2024) PhD Thesis §3.4; Tyan et al. (2017) §3.3"
+            )
         d_out_m = float(ss.get("resizing_d_out", 0.010))  # from structure tab
         S_top, S_front = compute_reference_areas(
             L_arm_m, D_prop_m, n_motors, ss.resizing_config,

@@ -32,12 +32,33 @@ def render():
 <div class="eq-box">
 <b>Cruise drag model (Tyan 2017)</b><br>
 D_f = ½ C_D ρ V² S_front &nbsp;·&nbsp; L_f = ½ C_L ρ V² S_top<br>
-F_cruise/motor = √((W + L_f)² + D_f²) / n_motors<br>
+F_cruise/motor = √((W − L_f)² + D_f²) / n_motors<br>
 v_i = √(F / (2 ρ A_disk)) &nbsp;·&nbsp;
 FM = 0.4742 × T^0.0793 &nbsp;(Figure of Merit)<br>
 P_cruise = n × F_motor × v_i / FM + P_avi + P_pay
 </div>
 """, unsafe_allow_html=True)
+
+    with st.expander("Equations & References"):
+        st.markdown("**Aerodynamic forces in cruise**")
+        st.latex(r"D_f = \tfrac{1}{2}\,C_D\,\rho\,V^2\,S_{front} \quad \text{(drag)}")
+        st.latex(r"L_f = \tfrac{1}{2}\,C_L\,\rho\,V^2\,S_{top} \quad \text{(body lift)}")
+        st.markdown("**Net force per motor**")
+        st.latex(r"F_{motor} = \frac{\sqrt{(W - L_f)^2 + D_f^2}}{n}, \quad W = MTOW \cdot g")
+        st.markdown("**Induced velocity (actuator-disk / momentum theory)**")
+        st.latex(r"v_i = \sqrt{\frac{F_{motor}}{2\,\rho\,A_{disk}}}, \quad A_{disk} = \pi\!\left(\frac{D_{prop}}{2}\right)^{\!2}")
+        st.markdown("**Figure of Merit (Tyan 2017, Eq. 17)**")
+        st.latex(r"FM = 0.4742 \times T_{motor}^{\,0.0793} \quad (T_{motor} \text{ in N})")
+        st.markdown("**Cruise motor power and energy**")
+        st.latex(r"P_{motor,cruise} = \frac{F_{motor} \cdot v_i}{FM}")
+        st.latex(r"P_{cruise,total} = n \cdot P_{motor,cruise} + P_{avi} + P_{pay} \quad \text{[W]}")
+        st.latex(r"E_{cruise} = P_{cruise,total} \times t_{cruise} \quad \text{[Wh]}")
+        st.caption(
+            "References: Tyan et al. (2017) 'An Improved Preliminary Sizing Method and "
+            "Sensitivity Analysis for a Multirotor UAV', Eq. 17; "
+            "Pollet (2024) PhD Thesis §3.7; "
+            "Leishman (2006) Principles of Helicopter Aerodynamics §2 (momentum theory)"
+        )
 
     col_left, col_right = st.columns([1, 1], gap="large")
 

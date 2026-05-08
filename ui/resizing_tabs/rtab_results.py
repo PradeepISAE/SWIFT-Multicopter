@@ -55,12 +55,40 @@ def _gather_params(ss):
     }
 
 
+def _eq_ref():
+    with st.expander("Equations & References — Convergence Loop"):
+        st.markdown("**Fixed-point iteration (converges when |MTOW_k+1 − MTOW_k| < ε)**")
+        st.latex(
+            r"MTOW_{k+1} = m_{pay} + M_{avi} + M_{prop} "
+            r"+ M_{struct}(MTOW_k) + M_{batt}(MTOW_k)"
+        )
+        st.markdown("**Motor hover power and thrust**")
+        st.latex(r"P_{motor} = \frac{MTOW \cdot g \cdot 1000}{PL_{50\%} \cdot n}")
+        st.latex(r"T_{motor} = \frac{MTOW_g}{n} \quad \text{[g per motor]}")
+        st.markdown("**Total mission energy**")
+        st.latex(r"E_{total} = E_{TO} + E_{climb} + E_{cruise} + E_{hover} + E_{land}")
+        st.markdown("**Battery mass**")
+        st.latex(r"M_{batt} = \frac{E_{total}}{SED \cdot DoD \cdot \eta_{elec}}")
+        st.markdown("**Structural mass (per iteration)**")
+        st.latex(
+            r"M_{struct}(k) = n \cdot \rho \cdot A_{cs}(MTOW_k) \cdot L_{arm} "
+            r"+ \max\!\left(0,\; M_{struct,sizing} - M_{arms}(k)\right)"
+        )
+        st.caption(
+            "References: Pollet (2024) PhD Thesis §3.1–§3.6; "
+            "Tyan et al. (2017) §3.5; "
+            "ε = 0.001 kg (convergence tolerance)"
+        )
+
+
 def render():
     st.markdown('<div class="section-tag">Resizing Phase · Results</div>',
                 unsafe_allow_html=True)
     st.markdown("## R8 · Resizing Results")
 
     ss = st.session_state
+
+    _eq_ref()
 
     # ── Run button ────────────────────────────────────────────────────────────
     btn_col, status_col = st.columns([1, 3], gap="medium")

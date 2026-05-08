@@ -10,6 +10,21 @@ from resizing.avionics_resizing import (
 )
 
 
+def _eq_ref():
+    with st.expander("Equations & References"):
+        st.markdown("**Avionics totals (enabled components only)**")
+        st.latex(r"M_{avi} = \frac{\displaystyle\sum_{i \in \text{enabled}} m_i}{1000} \quad \text{[kg]}")
+        st.latex(r"P_{avi} = \sum_{i \in \text{enabled}} P_i \quad \text{[W]}")
+        st.markdown("**Architecture effect on propulsion mass**")
+        st.latex(r"M_{prop}^{AIO} = \frac{n\,(m_{motor} + m_{prop})}{1000} \quad \text{[kg]}")
+        st.latex(r"M_{prop}^{Sep} = \frac{n\,(m_{motor} + m_{prop} + m_{ESC})}{1000} \quad \text{[kg]}")
+        st.caption(
+            "AIO Stack: ESC integrated in avionics — counted here. "
+            "Separate FC+ESC: ESC counted in R3 · Propulsion. "
+            "Reference: Pollet (2024) PhD Thesis §3.2"
+        )
+
+
 def render():
     st.markdown('<div class="section-tag">Resizing Phase · Avionics</div>',
                 unsafe_allow_html=True)
@@ -21,6 +36,8 @@ Select FC architecture, then enable each component on your UAV.
 Totals feed into the resizing loop as <b>M_avi_fixed</b> and <b>P_avi</b>.
 </div>
 """, unsafe_allow_html=True)
+
+    _eq_ref()
 
     ss = st.session_state
 
