@@ -375,7 +375,7 @@ def _init_session_state():
         "resizing_mission_segments": {
             "takeoff": {"active": True,  "duration_min": 0.5,  "a_TO_ms2": 19.62},
             "climb":   {"active": False, "duration_min": 2.0},
-            "cruise":  {"active": False, "duration_min": 0.0},
+            "cruise":  {"active": False, "duration_min": 5.0},
             "hover":   {"active": True,  "duration_min": 20.0},
             "land":    {"active": True,  "duration_min": 0.5,  "k_land": 0.5},
         },

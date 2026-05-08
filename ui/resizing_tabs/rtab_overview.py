@@ -9,7 +9,7 @@ import streamlit as st
 _ANAFI_SEGMENTS = {
     "takeoff": {"active": True,  "duration_min": 0.5,  "a_TO_ms2": 24.525},
     "climb":   {"active": False, "duration_min": 1.0},
-    "cruise":  {"active": False, "duration_min": 0.0},
+    "cruise":  {"active": False, "duration_min": 5.0},
     "hover":   {"active": True,  "duration_min": 25.0},
     "land":    {"active": True,  "duration_min": 0.5,  "k_land": 0.5},
 }

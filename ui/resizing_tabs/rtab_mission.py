@@ -181,7 +181,8 @@ computation. Takeoff, Hover, and Land are always active.
         ss.resizing_cruise_active = cr["active"]
         if cr["active"]:
             cr["duration_min"] = st.number_input(
-                "Cruise duration [min]", 0.1, 120.0, float(cr.get("duration_min", 5.0)),
+                "Cruise duration [min]", 0.1, 120.0,
+                max(0.1, float(cr.get("duration_min", 5.0))),
                 step=0.5, format="%.1f", key="_rz_cr_dur",
             )
             ss.resizing_V_cruise = st.number_input(
