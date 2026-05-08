@@ -15,7 +15,7 @@ st.set_page_config(
     page_title="SWIFT | Multicopter Sizing",
     page_icon="🚁",
     layout="wide",
-    initial_sidebar_state="collapsed",
+    initial_sidebar_state="auto",
 )
 
 
@@ -40,7 +40,6 @@ def _inject_css():
     background-color: #f7f7f8 !important;
     border-bottom: 1px solid #e5e7eb !important;
 }
-[data-testid="collapsedControl"] { display: none !important; }
 section[data-testid="stSidebar"] {
     background-color: #efefef !important;
 }
@@ -371,6 +370,10 @@ def _init_session_state():
         "c_battery_target":      0.0,
         "e_battery_target":      0.0,
         "p_total_target":        0.0,
+        # ── Resizing Phase — altitude (ISA) ─────────────────────────────────
+        "resizing_altitude_m": 0.0,
+        "resizing_rho_alt":    1.225,
+        "resizing_k_alt":      1.0,
         # ── Resizing Phase — mission ─────────────────────────────────────────
         "resizing_mission_segments": {
             "takeoff": {"active": True,  "duration_min": 0.5,  "a_TO_ms2": 19.62},
@@ -403,6 +406,7 @@ def _init_session_state():
         "resizing_sigma_custom":  600.0,
         "resizing_k_arm":         1.2,
         "resizing_k_ratio":       0.7,
+        "resizing_t_wall_mm":     1.0,
         "resizing_b_plate_m":     0.012,
         "resizing_FoS":           1.5,
         "resizing_c_margin_m":    0.010,
@@ -438,10 +442,21 @@ def _init_session_state():
         "resizing_done":            False,
         "resizing_MTOW_converged":  0.0,
         # ── Resizing Phase — optimisation ────────────────────────────────────
-        "resizing_opt_k_arm":   0.0,
-        "resizing_opt_k_ratio": 0.0,
-        "resizing_opt_MTOW":    0.0,
-        "resizing_opt_history": None,
+        "resizing_opt_k_arm":      0.0,
+        "resizing_opt_k_ratio":    0.0,
+        "resizing_opt_t_wall_mm":  0.0,
+        "resizing_opt_d_out_mm":   0.0,
+        "resizing_opt_d_in_mm":    0.0,
+        "resizing_opt_L_arm_mm":   0.0,
+        "resizing_opt_FoS_actual": 0.0,
+        "resizing_opt_M_arms":     0.0,
+        "resizing_opt_M_batt":     0.0,
+        "resizing_opt_MTOW":       0.0,
+        "resizing_opt_history":    None,
+        "resizing_std_cf_od_mm":   0.0,
+        "resizing_std_cf_wall_mm": 0.0,
+        # ── Session management ───────────────────────────────────────────────
+        "swift_project_name": "MyUAV",
         # ── Phase navigation ─────────────────────────────────────────────────
         "phase": "Sizing Phase",
     }
@@ -497,6 +512,78 @@ def main():
     _inject_css()
     _init_session_state()
     _render_header()
+
+    # ── Sidebar — session management ─────────────────────────────────────────
+    with st.sidebar:
+        st.markdown("### ⬡ SWIFT Session")
+
+        project_name = st.text_input(
+            "Project name",
+            st.session_state.get("swift_project_name", "MyUAV"),
+            key="_proj_name",
+        )
+        st.session_state.swift_project_name = project_name
+
+        st.markdown("---")
+
+        # Save to disk + download JSON
+        _c1, _c2 = st.columns(2)
+        with _c1:
+            if st.button("💾 Save", use_container_width=True, key="_save_btn",
+                         help="Save configuration to a JSON file in the working directory."):
+                try:
+                    from core.config_io import save_config
+                    _fp = save_config(project_name, dict(st.session_state), ".")
+                    st.success("Saved")
+                    st.caption(os.path.basename(_fp))
+                except Exception as _exc:
+                    st.error(str(_exc))
+        with _c2:
+            try:
+                import json as _json
+                from core.config_io import build_config
+                _cfg = build_config(project_name, dict(st.session_state))
+                _json_bytes = _json.dumps(_cfg, indent=2).encode("utf-8")
+            except Exception:
+                _json_bytes = b"{}"
+            st.download_button(
+                "⬇ JSON", _json_bytes,
+                file_name=f"SWIFT_{project_name}.json",
+                mime="application/json",
+                use_container_width=True, key="_dl_json",
+                help="Download session as JSON file.",
+            )
+
+        # Export summary CSV
+        try:
+            from core.config_io import build_config, export_summary_csv_string
+            _cfg2 = build_config(project_name, dict(st.session_state))
+            _csv_bytes = export_summary_csv_string(_cfg2).encode("utf-8")
+        except Exception:
+            _csv_bytes = b"Parameter,Sizing,Resizing,Optimised,Unit\n"
+        st.download_button(
+            "⬇ Summary CSV", _csv_bytes,
+            file_name=f"SWIFT_{project_name}_summary.csv",
+            mime="text/csv",
+            use_container_width=True, key="_dl_csv",
+            help="Export sizing/resizing/optimised comparison as CSV.",
+        )
+
+        st.markdown("---")
+        st.markdown("**Load configuration**")
+        _uploaded = st.file_uploader(
+            "Upload JSON config", type="json",
+            label_visibility="collapsed", key="_load_cfg",
+        )
+        if _uploaded is not None:
+            try:
+                from core.config_io import load_config, restore_session
+                _loaded_cfg = load_config(_uploaded.read())
+                _pname = restore_session(_loaded_cfg, st.session_state)
+                st.session_state.swift_project_name = _pname
+                st.success(f"Loaded: {_pname}")
+            except Exception as _exc:
+                st.error(f"Load failed: {_exc}")
 
     # ── Phase navigation ──────────────────────────────────────────────────────
     phase = st.radio(
