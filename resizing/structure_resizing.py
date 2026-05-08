@@ -178,3 +178,116 @@ def compute_structural_sizing(MTOW_kg: float, a_TO_ms2: float, n_motors: int,
         "M_body_kg":    M_body,
         "M_struct_kg":  M_struct,
     }
+
+
+# ── Standard CF tube catalogue & physical-wall inverse solver ─────────────
+
+STANDARD_CF_SIZES_MM = [
+    (6.0, 0.5),  (6.0, 1.0),
+    (8.0, 0.5),  (8.0, 1.0),  (8.0, 1.5),
+    (10.0, 1.0), (10.0, 1.5),
+    (12.0, 1.0), (12.0, 1.5), (12.0, 2.0),
+    (14.0, 1.5), (14.0, 2.0),
+    (16.0, 1.5), (16.0, 2.0),
+    (20.0, 2.0),
+]
+
+
+def nearest_standard_cf_tube(d_out_mm: float, t_wall_mm: float) -> tuple:
+    """Return (od_mm, wall_mm) of the smallest standard CF tube that covers d_out_mm."""
+    candidates = [(d, t) for d, t in STANDARD_CF_SIZES_MM if d >= d_out_mm]
+    if not candidates:
+        return STANDARD_CF_SIZES_MM[-1]
+    return min(candidates, key=lambda x: x[0])
+
+
+def solve_outer_from_stress(
+    profile: str, M_root_Nm: float, sigma_allow_mpa: float,
+    fos: float, t_wall_m: float, b_plate_m: float = 0.010,
+    tol: float = 1e-9, max_iter: int = 100,
+) -> float:
+    """Solve outer dimension from bending stress constraint with fixed wall thickness.
+
+    Circular/square: iterative (k = (d-2t)/d depends on d).
+    Flat plate: explicit h = sqrt(6M*FoS / (sigma*b)).
+    Returns outer dimension [m].
+    """
+    import math
+    sigma_design_pa = (sigma_allow_mpa * 1e6) / max(fos, 1e-12)
+    M = max(M_root_Nm, 1e-12)
+    prof = profile.lower().strip()
+
+    if prof == "flat_plate":
+        b = max(b_plate_m, 1e-6)
+        return math.sqrt(6.0 * M / (sigma_design_pa * b))
+
+    if prof == "circular":
+        outer = (32.0 * M / (math.pi * sigma_design_pa)) ** (1.0 / 3.0)
+        for _ in range(max_iter):
+            t = min(t_wall_m, outer / 2.0 - 1e-9)
+            k = (outer - 2.0 * t) / max(outer, 1e-12)
+            factor = max(1.0 - k ** 4, 1e-12)
+            outer_new = (32.0 * M / (math.pi * sigma_design_pa * factor)) ** (1.0 / 3.0)
+            if abs(outer_new - outer) < tol:
+                return max(outer_new, 2.0 * t_wall_m + 1e-6)
+            outer = outer_new
+        return max(outer, 2.0 * t_wall_m + 1e-6)
+
+    if prof == "square":
+        outer = (6.0 * M / sigma_design_pa) ** (1.0 / 3.0)
+        for _ in range(max_iter):
+            t = min(t_wall_m, outer / 2.0 - 1e-9)
+            k = (outer - 2.0 * t) / max(outer, 1e-12)
+            factor = max(1.0 - k ** 4, 1e-12)
+            outer_new = (6.0 * M / (sigma_design_pa * factor)) ** (1.0 / 3.0)
+            if abs(outer_new - outer) < tol:
+                return max(outer_new, 2.0 * t_wall_m + 1e-6)
+            outer = outer_new
+        return max(outer, 2.0 * t_wall_m + 1e-6)
+
+    raise ValueError(f"Unknown profile: {profile!r}")
+
+
+def arm_cross_section_area(profile: str, outer_m: float, t_wall_m: float,
+                           b_plate_m: float = 0.010) -> float:
+    """Cross-sectional area [m²] for the given profile.
+
+    Circular/square: annular area (outer² − inner²).
+    Flat plate: b × h  where outer_m is the solved height h.
+    """
+    import math
+    prof  = profile.lower().strip()
+    outer = max(outer_m, 1e-9)
+    t     = min(t_wall_m, outer / 2.0 - 1e-9)
+    if prof == "circular":
+        inner = outer - 2.0 * t
+        return (math.pi / 4.0) * (outer ** 2 - inner ** 2)
+    if prof == "square":
+        inner = outer - 2.0 * t
+        return outer ** 2 - inner ** 2
+    if prof == "flat_plate":
+        return max(b_plate_m, 1e-6) * max(outer_m, 1e-9)
+    raise ValueError(f"Unknown profile: {profile!r}")
+
+
+def compute_stress_mpa(profile: str, M_root_Nm: float, outer_m: float,
+                       t_wall_m: float, b_plate_m: float = 0.010) -> float:
+    """Bending stress [MPa] at the arm root for the given profile.
+
+    Circular: 32M / (π d³ (1−k⁴)).  Square: 6M / (b³ (1−k⁴)).
+    Flat plate: 6M / (b h²)  where outer_m = h.
+    """
+    import math
+    prof  = profile.lower().strip()
+    M     = max(M_root_Nm, 1e-12)
+    outer = max(outer_m, 1e-9)
+    t     = min(t_wall_m, outer / 2.0 - 1e-9)
+    if prof == "circular":
+        k = (outer - 2.0 * t) / outer
+        return (32.0 * M / (math.pi * outer ** 3 * max(1.0 - k ** 4, 1e-12))) / 1e6
+    if prof == "square":
+        k = (outer - 2.0 * t) / outer
+        return (6.0 * M / (outer ** 3 * max(1.0 - k ** 4, 1e-12))) / 1e6
+    if prof == "flat_plate":
+        return (6.0 * M / (max(b_plate_m, 1e-6) * max(outer_m, 1e-9) ** 2)) / 1e6
+    raise ValueError(f"Unknown profile: {profile!r}")

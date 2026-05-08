@@ -6,7 +6,27 @@ import streamlit as st
 import numpy as np
 from resizing.structure_resizing import (
     MATERIALS, compute_F_max, solve_arm, arm_mass_one, prop_clearance,
+    solve_outer_from_stress, nearest_standard_cf_tube,
 )
+
+
+_PROF_OPTS   = ["circular", "square", "flat_plate"]
+_PROF_LABELS = ["Circular Hollow Tube", "Square Hollow Tube", "Flat Plate"]
+_IDX_MAP = {
+    "circular": 0, "Circular Hollow Tube": 0,
+    "square": 1,   "Square Hollow Tube": 1,
+    "flat_plate": 2, "Flat Plate": 2,
+}
+
+
+def _profile_to_cs_type(profile: str) -> str:
+    """Map lowercase profile key → display label used by solve_arm."""
+    p = profile.lower().strip()
+    if p == "circular":
+        return "Circular Hollow Tube"
+    if p == "square":
+        return "Square Hollow Tube"
+    return "Flat Plate"
 
 
 def _get_mat_props(ss):
@@ -20,7 +40,8 @@ def _get_mat_props(ss):
 def _compute_and_store(ss):
     """Solve arm dimensions for current session state and persist results."""
     rho, sigma_allow_Pa = _get_mat_props(ss)
-    cs_type   = ss.get("resizing_cross_section", "Circular Hollow Tube")
+    _stored = ss.get("resizing_cross_section", "Circular Hollow Tube")
+    cs_type = _profile_to_cs_type(_stored)  # always display label for solve_arm
     k_arm     = float(ss.get("resizing_k_arm",    1.2))
     k_ratio   = float(ss.get("resizing_k_ratio",  0.7))
     b_plate_m = float(ss.get("resizing_b_plate_m", 0.012))
@@ -98,36 +119,113 @@ Root moment: M_root = F_max × L_arm &nbsp;·&nbsp; L_arm = k_arm × D_prop / 2
 </div>
 """, unsafe_allow_html=True)
 
+    with st.expander("Equations & References"):
+        st.markdown("**Arm geometry**")
+        st.latex(r"L_{arm} = k_{arm} \cdot \frac{D_{prop}}{2}")
+        st.markdown("**Cantilever loading (worst case: takeoff)**")
+        st.latex(r"F_{max} = \frac{MTOW \cdot g \cdot k_{TO}}{n_{motors}}, \quad k_{TO} = 1 + \frac{a_{TO}}{g}")
+        st.latex(r"M_{root} = F_{max} \cdot L_{arm}")
+        st.markdown("**Inverse solve — Circular Hollow Tube**")
+        st.latex(r"d_{out} = \left(\frac{32\,M_{root}\,FoS}{\pi\,\sigma_{allow}\,(1 - k_{ratio}^4)}\right)^{1/3}")
+        st.markdown("**Inverse solve — Square Hollow Tube**")
+        st.latex(r"b_{out} = \left(\frac{6\,M_{root}\,FoS}{\sigma_{allow}\,(1 - k_{ratio}^4)}\right)^{1/3}")
+        st.markdown("**Inverse solve — Flat Plate**")
+        st.latex(r"h = \sqrt{\frac{6\,M_{root}\,FoS}{\sigma_{allow}\,b}}")
+        st.markdown("**Structural mass**")
+        st.latex(r"M_{arms} = n_{motors} \cdot \rho \cdot A_{cs} \cdot L_{arm}")
+        st.latex(r"M_{body} = \max\!\left(0,\; M_{struct,sizing} - M_{arms}\right)")
+        st.markdown("**Propeller clearance**")
+        st.latex(r"d_{between} = 2\,L_{arm}\,\sin\!\left(\frac{\pi}{n_{motors}}\right) > D_{prop} + c_{margin}")
+        st.caption(
+            "References: Pollet (2024) PhD Thesis §3.4; "
+            "Tyan et al. (2017) §3.3; "
+            "Timoshenko & Goodier — Theory of Elasticity (bending stress)"
+        )
+
     ss = st.session_state
 
     col_left, col_right = st.columns([1, 1], gap="large")
 
     with col_left:
         st.markdown("**Cross-section type**")
-        cs_opts = ["Circular Hollow Tube", "Square Hollow Tube", "Flat Plate"]
-        cs_type = st.selectbox(
+        _stored_prof = ss.get("resizing_cross_section", "Circular Hollow Tube")
+        _cs_label = st.selectbox(
             "Cross-section",
-            cs_opts,
-            index=cs_opts.index(ss.get("resizing_cross_section", "Circular Hollow Tube")),
+            _PROF_LABELS,
+            index=_IDX_MAP.get(_stored_prof, 0),
             key="_rz_cs",
         )
-        ss.resizing_cross_section = cs_type
+        _cs_profile = _PROF_OPTS[_PROF_LABELS.index(_cs_label)]
+        ss.resizing_cross_section = _cs_profile
+        cs_type = _cs_label  # display label for local if/else checks
 
         if cs_type in ("Circular Hollow Tube", "Square Hollow Tube"):
-            ss.resizing_k_ratio = st.slider(
-                "Inner/outer ratio k_ratio  (d_in/d_out or b_in/b_out)",
-                0.30, 0.90,
-                float(ss.get("resizing_k_ratio", 0.7)),
-                step=0.05, format="%.2f",
-                help="0.7 is typical for CF tubes. Higher → thinner wall → lighter but weaker.",
-                key="_rz_kr",
+            t_wall_mm_input = st.number_input(
+                "Wall thickness t_wall [mm]",
+                0.3, 3.0,
+                float(ss.get("resizing_t_wall_mm", 1.0)),
+                step=0.1, format="%.1f",
+                help="Physical wall thickness. Typical CF: 0.5–2.0 mm.",
+                key="_rz_tw",
             )
+            ss.resizing_t_wall_mm = t_wall_mm_input
+            _t_wall_m = t_wall_mm_input / 1000.0
+
+            # Derive d_out and k_ratio via stress-based inverse solver
+            _rho_tmp, _sig_pa_tmp = _get_mat_props(ss)
+            _D_prop_tmp  = float(ss.get("resizing_D_prop_m", 0.127))
+            _k_arm_tmp   = float(ss.get("resizing_k_arm", 1.2))
+            _a_TO_tmp    = float(ss.get("resizing_a_TO_ms2", 19.62))
+            _n_tmp       = int(ss.get("n_motors", 4))
+            _FoS_tmp     = float(ss.get("resizing_FoS", 1.5))
+            _MTOW_tmp    = float(ss.get("resizing_MTOW_converged",
+                                         ss.get("mtow_converged", 0.5)))
+            if _MTOW_tmp <= 0:
+                _MTOW_tmp = 0.5
+            _L_tmp   = _k_arm_tmp * _D_prop_tmp / 2.0
+            _Fmax_tmp = compute_F_max(_MTOW_tmp, _a_TO_tmp, _n_tmp)
+            _Mroot_tmp = _Fmax_tmp * _L_tmp
+            _prof_str = "circular" if cs_type == "Circular Hollow Tube" else "square"
+            try:
+                _d_out_tmp = solve_outer_from_stress(
+                    _prof_str, _Mroot_tmp, _sig_pa_tmp / 1e6,
+                    _FoS_tmp, _t_wall_m,
+                    float(ss.get("resizing_b_plate_m", 0.012)),
+                )
+                _kr_tmp = max(0.01, min(0.99, (_d_out_tmp - 2.0 * _t_wall_m) / _d_out_tmp)) \
+                    if _d_out_tmp > 2.0 * _t_wall_m else 0.01
+            except Exception:
+                _d_out_tmp = 0.003
+                _kr_tmp = 0.7
+
+            ss.resizing_k_ratio  = _kr_tmp
+            ss.resizing_d_out_mm = _d_out_tmp * 1000.0
+            ss.resizing_d_in_mm  = max(0.0, _d_out_tmp - 2.0 * _t_wall_m) * 1000.0
+
+            # Show derived geometry
+            _ca, _cb, _cc = st.columns(3)
+            _ca.metric("d_out (computed)", f"{_d_out_tmp*1000:.2f} mm")
+            _cb.metric("d_in (computed)",  f"{max(0.0, _d_out_tmp - 2*_t_wall_m)*1000:.2f} mm")
+            _cc.metric("k_ratio (derived)", f"{_kr_tmp:.3f}")
+
+            # Standard CF tube recommendation
+            _std_cf = nearest_standard_cf_tube(_d_out_tmp * 1000.0, t_wall_mm_input)
+            ss.resizing_std_cf_od_mm   = _std_cf[0]
+            ss.resizing_std_cf_wall_mm = _std_cf[1]
+            st.markdown(f"""
+<div style="background:#f0fdf4;border:1px solid #86efac;border-radius:8px;
+            padding:10px 14px;margin-top:4px;font-size:0.83rem;">
+  <b>Standard CF tube:</b> OD = {_std_cf[0]:.1f} mm &nbsp;·&nbsp; wall = {_std_cf[1]:.1f} mm
+  &nbsp;(smallest catalogue size ≥ {_d_out_tmp*1000:.2f} mm)
+</div>
+""", unsafe_allow_html=True)
         else:
             ss.resizing_b_plate_m = st.number_input(
                 "Plate width b [mm]", 5.0, 80.0,
                 float(ss.get("resizing_b_plate_m", 0.012) * 1000),
                 step=1.0, format="%.1f", key="_rz_bp",
             ) / 1000.0
+            ss.resizing_b_plate_mm = ss.resizing_b_plate_m * 1000.0
 
         st.markdown("**Material**")
         mat_keys = list(MATERIALS.keys())
@@ -210,7 +308,7 @@ Root moment: M_root = F_max × L_arm &nbsp;·&nbsp; L_arm = k_arm × D_prop / 2
     with col_str:
         st.markdown("### Solved Arm Dimensions")
 
-        cs_type = ss.resizing_cross_section
+        cs_type = _profile_to_cs_type(ss.resizing_cross_section)
         if cs_type == "Circular Hollow Tube":
             d_out_mm = dims.get("d_out_m", 0.0) * 1000.0
             d_in_mm  = dims.get("d_in_m",  0.0) * 1000.0
@@ -224,7 +322,7 @@ Root moment: M_root = F_max × L_arm &nbsp;·&nbsp; L_arm = k_arm × D_prop / 2
             padding:12px 16px;font-size:0.87rem;margin-top:8px;">
   d_out = <b style="color:#d97706;">{d_out_mm:.3f} mm</b><br>
   d_in  = {d_in_mm:.3f} mm &nbsp;·&nbsp; t_wall = {t_mm:.3f} mm<br>
-  k_ratio = {ss.resizing_k_ratio:.2f} &nbsp;·&nbsp; A = {dims.get("A_m2",0)*1e6:.3f} mm²
+  k_ratio (derived) = {ss.resizing_k_ratio:.3f} &nbsp;·&nbsp; A = {dims.get("A_m2",0)*1e6:.3f} mm²
 </div>
 """, unsafe_allow_html=True)
 
@@ -241,7 +339,7 @@ Root moment: M_root = F_max × L_arm &nbsp;·&nbsp; L_arm = k_arm × D_prop / 2
             padding:12px 16px;font-size:0.87rem;margin-top:8px;">
   b_out = <b style="color:#d97706;">{b_out_mm:.3f} mm</b><br>
   b_in  = {b_in_mm:.3f} mm &nbsp;·&nbsp; t_wall = {t_mm:.3f} mm<br>
-  k_ratio = {ss.resizing_k_ratio:.2f} &nbsp;·&nbsp; A = {dims.get("A_m2",0)*1e6:.3f} mm²
+  k_ratio (derived) = {ss.resizing_k_ratio:.3f} &nbsp;·&nbsp; A = {dims.get("A_m2",0)*1e6:.3f} mm²
 </div>
 """, unsafe_allow_html=True)
 
