@@ -334,35 +334,30 @@ hr { border-color: #e5e7eb !important; margin: 20px 0 !important; }
 
 def _init_session_state():
     defaults = {
-        # Mission
+        # ── Sizing Phase inputs ──────────────────────────────────────────────
         "uav_name":      "SWIFT UAV",
         "n_motors":      4,
         "t_flight_min":  20.0,
         "P_avi":         1.0,
-        # Payload
         "m_pay":         0.030,
         "MF_pay":        0.20,
         "P_pay":         1.0,
-        # Structures
         "MF_str":        0.20,
-        # Avionics (fraction)
         "MF_avi":        0.15,
-        # Propulsion — datasheet inputs
         "motor_label":   "Generic 1806 2300KV",
         "M_motor_g":     7.2,
         "M_prop_g":      1.0,
         "P_max_W":       60.0,
         "V_batt":        11.1,
-        # Battery
         "SED":           150.0,
         "DoD":           0.85,
         "eta_elec":      0.85,
         "PL_mode":       "Single Value",
         "PL":            8.0,
-        # Sizing results
+        # ── Sizing Phase results ─────────────────────────────────────────────
         "results":       None,
         "sweep_results": None,
-        # Sizing → Resizing bridge
+        # ── Sizing → Resizing bridge ─────────────────────────────────────────
         "sizing_done":           False,
         "mtow_converged":        0.0,
         "m_struct_sizing":       0.0,
@@ -376,53 +371,79 @@ def _init_session_state():
         "c_battery_target":      0.0,
         "e_battery_target":      0.0,
         "p_total_target":        0.0,
-        # Resizing phase — structure
-        "rz_cs_type":       "Circular tube",
-        "rz_material":      "CF tube",
-        "rz_rho_custom":    1600.0,
-        "rz_sigma_custom":  600.0,
-        "rz_d_outer_mm":    10.0,
-        "rz_t_wall_mm":     1.0,
-        "rz_b_outer_mm":    10.0,
-        "rz_b_plate_mm":    12.0,
-        "rz_h_plate_mm":    2.0,
-        "rz_k_arm":         2.5,
-        "rz_D_prop_mm":     127.0,
-        "rz_FoS_req":       1.5,
-        "rz_c_margin_mm":   10.0,
-        "rz_M_body_g":      15.0,
-        # Resizing phase — computed structure outputs
-        "rz_L_arm_m":       0.10,
-        "rz_D_prop_m":      0.127,
-        "rz_M_struct_fixed":0.05,
-        "rz_stress_ok":     None,
-        "rz_clearance_ok":  None,
-        "rz_FoS_actual":    0.0,
-        "rz_sigma_MPa":     0.0,
-        "rz_d_between_m":   0.0,
-        "rz_T_max_N":       0.0,
-        "rz_m_one_arm_g":   0.0,
-        # Resizing phase — avionics
-        "rz_M_avi_fixed":   0.03,
-        "rz_P_avi_W":       1.3,
-        # Resizing phase — propulsion
-        "rz_M_prop_fixed":  0.02,
-        "rz_T_max_N":       0.0,
-        "rz_PL":            8.0,
-        # Resizing phase — battery
-        "rz_SED":           150.0,
-        "rz_V_batt":        11.1,
-        # Resizing phase — mission
-        "rz_t_flight_min":  20.0,
-        "rz_DoD":           0.85,
-        "rz_eta_elec":      0.85,
-        "rz_config":        "Quad X",
-        # Resizing phase — results
-        "rz_results":       None,
-        "rz_opt_result":    None,
-        "rz_opt_history":   None,
-        # Phase navigation
-        "phase":            "Sizing Phase",
+        # ── Resizing Phase — mission ─────────────────────────────────────────
+        "resizing_mission_segments": {
+            "takeoff": {"active": True,  "duration_min": 0.5,  "a_TO_ms2": 19.62},
+            "climb":   {"active": False, "duration_min": 2.0},
+            "cruise":  {"active": False, "duration_min": 0.0},
+            "hover":   {"active": True,  "duration_min": 20.0},
+            "land":    {"active": True,  "duration_min": 0.5,  "k_land": 0.5},
+        },
+        "resizing_cruise_active": False,
+        "resizing_a_TO_ms2":   19.62,
+        "resizing_k_land":     0.5,
+        "resizing_V_climb":    3.0,
+        "resizing_V_cruise":   10.0,
+        "resizing_config":     "Quad X",
+        "resizing_DoD":        0.85,
+        "resizing_eta_elec":   0.85,
+        # ── Resizing Phase — avionics ────────────────────────────────────────
+        "resizing_avi_architecture": "AIO Stack",
+        "resizing_M_avi":  0.030,
+        "resizing_P_avi":  1.3,
+        # ── Resizing Phase — propulsion ──────────────────────────────────────
+        "resizing_M_prop":        0.020,
+        "resizing_PL_50pct_gW":   4.0,
+        "resizing_T_100pct_g":    0.0,
+        "resizing_D_prop_m":      0.127,
+        # ── Resizing Phase — structure ───────────────────────────────────────
+        "resizing_cross_section": "Circular Hollow Tube",
+        "resizing_material":      "CF tube/rod",
+        "resizing_rho_custom":    1600.0,
+        "resizing_sigma_custom":  600.0,
+        "resizing_k_arm":         1.2,
+        "resizing_k_ratio":       0.7,
+        "resizing_b_plate_m":     0.012,
+        "resizing_FoS":           1.5,
+        "resizing_c_margin_m":    0.010,
+        "resizing_M_struct_sizing": 0.050,
+        "resizing_body_diameter": 0.08,
+        "resizing_M_body":        0.030,
+        # ── Resizing Phase — computed structure ──────────────────────────────
+        "resizing_L_arm":         0.076,
+        "resizing_d_out":         0.003,
+        "resizing_M_arms":        0.0,
+        "resizing_M_body_calc":   0.0,
+        "resizing_M_struct":      0.0,
+        "resizing_FoS_actual":    0.0,
+        "resizing_sigma_root_MPa":0.0,
+        "resizing_stress_ok":     None,
+        "resizing_clearance_ok":  None,
+        "resizing_d_between_m":   0.0,
+        "resizing_struct_dims":   {},
+        # ── Resizing Phase — battery ─────────────────────────────────────────
+        "resizing_SED":           150.0,
+        "resizing_V_batt":        11.1,
+        "resizing_selected_batt_idx": -1,
+        "resizing_E_cruise_Wh":   0.0,
+        # ── Resizing Phase — layout ──────────────────────────────────────────
+        "resizing_S_top":   0.05,
+        "resizing_S_front": 0.02,
+        # ── Resizing Phase — aerodynamics ────────────────────────────────────
+        "resizing_C_D":     0.35,
+        "resizing_C_L":     0.0,
+        "resizing_rho_air": 1.225,
+        # ── Resizing Phase — results ─────────────────────────────────────────
+        "resizing_results":         None,
+        "resizing_done":            False,
+        "resizing_MTOW_converged":  0.0,
+        # ── Resizing Phase — optimisation ────────────────────────────────────
+        "resizing_opt_k_arm":   0.0,
+        "resizing_opt_k_ratio": 0.0,
+        "resizing_opt_MTOW":    0.0,
+        "resizing_opt_history": None,
+        # ── Phase navigation ─────────────────────────────────────────────────
+        "phase": "Sizing Phase",
     }
     for key, val in defaults.items():
         if key not in st.session_state:
@@ -465,7 +486,7 @@ def _render_header():
         font-size:0.65rem;color:#6b7280;letter-spacing:0.06em;
         border:1px solid #e5e7eb;padding:4px 12px;border-radius:6px;
         background:#f9fafb;
-    ">v 2.0</div>
+    ">v 3.0</div>
 </div>
 """, unsafe_allow_html=True)
 
@@ -522,34 +543,56 @@ def main():
     else:
         from ui.resizing_tabs import (
             rtab_overview,
-            rtab_structure,
+            rtab_mission,
             rtab_avionics,
             rtab_propulsion,
+            rtab_structure,
             rtab_battery,
-            rtab_mission,
+            rtab_layout_2d,
+            rtab_aerodynamics,
             rtab_results,
             rtab_optimisation,
         )
 
-        tabs = st.tabs([
+        cruise_active = st.session_state.get("resizing_cruise_active", False)
+
+        # Build tab list — aerodynamics tab is conditional on cruise being active
+        tab_labels = [
             "R0 · Overview",
-            "R1 · Structure",
+            "R1 · Mission",
             "R2 · Avionics",
             "R3 · Propulsion",
-            "R4 · Battery",
-            "R5 · Mission",
-            "R6 · Results",
-            "R7 · Optimisation",
-        ])
+            "R4 · Structure",
+            "R5 · Battery",
+            "R6 · Layout 2D",
+        ]
+        tab_modules = [
+            rtab_overview,
+            rtab_mission,
+            rtab_avionics,
+            rtab_propulsion,
+            rtab_structure,
+            rtab_battery,
+            rtab_layout_2d,
+        ]
 
-        with tabs[0]: rtab_overview.render()
-        with tabs[1]: rtab_structure.render()
-        with tabs[2]: rtab_avionics.render()
-        with tabs[3]: rtab_propulsion.render()
-        with tabs[4]: rtab_battery.render()
-        with tabs[5]: rtab_mission.render()
-        with tabs[6]: rtab_results.render()
-        with tabs[7]: rtab_optimisation.render()
+        if cruise_active:
+            tab_labels.append("R7 · Aerodynamics")
+            tab_modules.append(rtab_aerodynamics)
+            tab_labels.append("R8 · Results")
+            tab_modules.append(rtab_results)
+            tab_labels.append("R9 · Optimisation")
+            tab_modules.append(rtab_optimisation)
+        else:
+            tab_labels.append("R7 · Results")
+            tab_modules.append(rtab_results)
+            tab_labels.append("R8 · Optimisation")
+            tab_modules.append(rtab_optimisation)
+
+        tabs = st.tabs(tab_labels)
+        for tab, module in zip(tabs, tab_modules):
+            with tab:
+                module.render()
 
 
 if __name__ == "__main__":

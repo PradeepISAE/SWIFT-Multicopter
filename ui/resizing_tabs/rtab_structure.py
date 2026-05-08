@@ -1,95 +1,100 @@
 """
-Resizing Phase — Structure tab.
-Arm cross-section, material, FoS, geometry. Stress + clearance checks.
+Resizing Phase — Structure (R4).
+Arm dimensions are SOLVED from the bending stress constraint (inverse problem).
 """
 import streamlit as st
 import numpy as np
 from resizing.structure_resizing import (
-    MATERIALS, section_properties, stress_check, arm_mass_one, prop_clearance,
+    MATERIALS, compute_F_max, solve_arm, arm_mass_one, prop_clearance,
 )
 
 
-def _dims_from_state(cs_type):
-    ss = st.session_state
-    if cs_type == "Circular tube":
-        return {"d_outer": ss.rz_d_outer_mm / 1000.0,
-                "t_wall":  ss.rz_t_wall_mm  / 1000.0}
-    if cs_type == "Square tube":
-        return {"b_outer": ss.rz_b_outer_mm / 1000.0,
-                "t_wall":  ss.rz_t_wall_mm  / 1000.0}
-    return {"b": ss.rz_b_plate_mm / 1000.0,
-            "h": ss.rz_h_plate_mm / 1000.0}
-
-
-def _compute_and_store():
-    ss = st.session_state
-    cs_type = ss.rz_cs_type
-    mat     = ss.rz_material
-
+def _get_mat_props(ss):
+    mat = ss.get("resizing_material", "CF tube/rod")
     if mat == "Custom":
-        rho           = ss.rz_rho_custom
-        sigma_allow   = ss.rz_sigma_custom
-    else:
-        rho           = MATERIALS[mat]["rho"]
-        sigma_allow   = MATERIALS[mat]["sigma_allow_MPa"]
+        return ss.get("resizing_rho_custom", 1600.0), ss.get("resizing_sigma_custom", 600.0) * 1e6
+    m = MATERIALS.get(mat, MATERIALS["CF tube/rod"])
+    return m["rho"], m["sigma_allow_MPa"] * 1e6
 
-    D_prop_m  = ss.rz_D_prop_mm / 1000.0
-    L_arm_m   = ss.rz_k_arm * D_prop_m / 2.0
-    dims_m    = _dims_from_state(cs_type)
-    FoS_req   = ss.rz_FoS_req
-    c_margin  = ss.rz_c_margin_mm / 1000.0
-    n_motors  = ss.n_motors
+
+def _compute_and_store(ss):
+    """Solve arm dimensions for current session state and persist results."""
+    rho, sigma_allow_Pa = _get_mat_props(ss)
+    cs_type   = ss.get("resizing_cross_section", "Circular Hollow Tube")
+    k_arm     = float(ss.get("resizing_k_arm",    1.2))
+    k_ratio   = float(ss.get("resizing_k_ratio",  0.7))
+    b_plate_m = float(ss.get("resizing_b_plate_m", 0.012))
+    D_prop_m  = float(ss.get("resizing_D_prop_m",  0.127))
+    FoS       = float(ss.get("resizing_FoS",        1.5))
+    n_motors  = int(ss.get("n_motors", 4))
+    c_margin  = float(ss.get("resizing_c_margin_m", 0.010))
+    a_TO      = float(ss.get("resizing_a_TO_ms2",   19.62))
+    M_sz      = float(ss.get("resizing_M_struct_sizing",
+                              ss.get("m_struct_sizing", 0.05)))
+
+    # Use MTOW estimate: converged if available, else from sizing, else guess
+    MTOW_est = float(ss.get("resizing_MTOW_converged",
+                     ss.get("mtow_converged", 0.5)))
+    if MTOW_est <= 0:
+        MTOW_est = 0.5
+
+    L_arm  = k_arm * D_prop_m / 2.0
+    F_max  = compute_F_max(MTOW_est, a_TO, n_motors)
+    M_root = F_max * L_arm
 
     try:
-        I, c, A = section_properties(cs_type, dims_m)
+        dims = solve_arm(cs_type, M_root, sigma_allow_Pa, FoS, k_ratio, b_plate_m)
     except Exception:
-        I, c, A = 0.0, 0.0, 0.0
+        dims = {"A_m2": 0.0, "FoS_actual": 0.0, "sigma_root_Pa": 0.0, "passed": False}
 
-    # T_max: use sizing target if available, else 2 × hover thrust
-    T_hover_N = ss.get("t_motor_target", 0.0) * 9.81 / 1000.0  # g → N
-    T_max_N   = T_hover_N * 2.0  # worst-case = 2 × hover
+    A      = dims.get("A_m2", 0.0)
+    m_one  = arm_mass_one(rho, A, L_arm)
+    M_arms = n_motors * m_one
+    M_body = max(0.0, M_sz - M_arms)
+    M_struct = M_arms + M_body
 
-    sigma_MPa, FoS_actual, stress_ok = stress_check(T_max_N, L_arm_m, I, c,
-                                                     sigma_allow, FoS_req)
-    d_between, clear_ok = prop_clearance(L_arm_m, D_prop_m, n_motors, c_margin)
-    m_one_arm   = arm_mass_one(rho, A, L_arm_m)
-    M_arms      = n_motors * m_one_arm
-    M_body      = ss.rz_M_body_g / 1000.0
-    M_struct    = M_arms + M_body
+    d_between, clear_ok = prop_clearance(L_arm, D_prop_m, n_motors, c_margin)
 
-    ss.rz_L_arm_m          = L_arm_m
-    ss.rz_D_prop_m         = D_prop_m
-    ss.rz_M_struct_fixed   = M_struct
-    ss.rz_stress_ok        = stress_ok
-    ss.rz_clearance_ok     = clear_ok
-    ss.rz_FoS_actual       = FoS_actual
-    ss.rz_sigma_MPa        = sigma_MPa
-    ss.rz_d_between_m      = d_between
-    ss.rz_T_max_N          = T_max_N
-    ss.rz_m_one_arm_g      = m_one_arm * 1000.0
+    # Persist to session state for use by convergence loop
+    ss.resizing_L_arm         = L_arm
+    ss.resizing_d_out         = dims.get("d_out_m", dims.get("b_out_m", dims.get("h_m", 0.0)))
+    ss.resizing_M_arms        = M_arms
+    ss.resizing_M_body_calc   = M_body
+    ss.resizing_M_struct      = M_struct
+    ss.resizing_FoS_actual    = dims.get("FoS_actual", 0.0)
+    ss.resizing_sigma_root_MPa = dims.get("sigma_root_Pa", 0.0) / 1e6
+    ss.resizing_stress_ok     = dims.get("passed", False)
+    ss.resizing_clearance_ok  = clear_ok
+    ss.resizing_d_between_m   = d_between
+    ss.resizing_struct_dims   = dims
 
     return {
-        "L_arm_m": L_arm_m, "D_prop_m": D_prop_m,
-        "I": I, "c": c, "A": A,
-        "sigma_MPa": sigma_MPa, "FoS_actual": FoS_actual, "stress_ok": stress_ok,
-        "d_between": d_between, "clear_ok": clear_ok,
-        "m_one_arm_g": m_one_arm * 1000.0,
+        "L_arm": L_arm, "F_max": F_max, "M_root": M_root,
+        "dims": dims, "A": A,
+        "m_one_g": m_one * 1000.0,
         "M_arms_g": M_arms * 1000.0,
+        "M_body_g": M_body * 1000.0,
         "M_struct_g": M_struct * 1000.0,
-        "rho": rho, "sigma_allow": sigma_allow,
+        "FoS_actual": dims.get("FoS_actual", 0.0),
+        "sigma_root_MPa": dims.get("sigma_root_Pa", 0.0) / 1e6,
+        "stress_ok": dims.get("passed", False),
+        "d_between": d_between,
+        "clear_ok": clear_ok,
+        "rho": rho,
+        "sigma_allow_MPa": sigma_allow_Pa / 1e6,
     }
 
 
 def render():
     st.markdown('<div class="section-tag">Resizing Phase · Structure</div>',
                 unsafe_allow_html=True)
-    st.markdown("## R1 · Arm Structural Sizing")
+    st.markdown("## R4 · Arm Structural Sizing")
 
     st.markdown("""
 <div class="eq-box">
-Cantilever beam model — tip load = T_max per motor (= 2 × T_hover, worst-case landing).<br>
-σ<sub>root</sub> = M<sub>bend</sub> × c / I &nbsp;·&nbsp;
-FoS = σ<sub>allow</sub> / σ<sub>root</sub>
+Arm dimensions are <b>solved</b> from the bending stress constraint (inverse problem).<br>
+Cantilever tip load: F_max = MTOW × g × (1 + a_TO/g) / n_motors<br>
+Root moment: M_root = F_max × L_arm &nbsp;·&nbsp; L_arm = k_arm × D_prop / 2
 </div>
 """, unsafe_allow_html=True)
 
@@ -98,141 +103,196 @@ FoS = σ<sub>allow</sub> / σ<sub>root</sub>
     col_left, col_right = st.columns([1, 1], gap="large")
 
     with col_left:
-        st.markdown("**Cross-section**")
+        st.markdown("**Cross-section type**")
+        cs_opts = ["Circular Hollow Tube", "Square Hollow Tube", "Flat Plate"]
         cs_type = st.selectbox(
-            "Cross-section type",
-            ["Circular tube", "Square tube", "Flat plate"],
-            index=["Circular tube", "Square tube", "Flat plate"].index(ss.rz_cs_type),
-            key="_sel_cs",
+            "Cross-section",
+            cs_opts,
+            index=cs_opts.index(ss.get("resizing_cross_section", "Circular Hollow Tube")),
+            key="_rz_cs",
         )
-        ss.rz_cs_type = cs_type
+        ss.resizing_cross_section = cs_type
 
-        if cs_type == "Circular tube":
-            ss.rz_d_outer_mm = st.number_input(
-                "Outer diameter [mm]", 2.0, 50.0, float(ss.rz_d_outer_mm),
-                step=0.5, format="%.1f", key="_num_do")
-            ss.rz_t_wall_mm = st.number_input(
-                "Wall thickness [mm]", 0.2, 5.0, float(ss.rz_t_wall_mm),
-                step=0.1, format="%.1f", key="_num_tw")
-        elif cs_type == "Square tube":
-            ss.rz_b_outer_mm = st.number_input(
-                "Outer side [mm]", 2.0, 50.0, float(ss.rz_b_outer_mm),
-                step=0.5, format="%.1f", key="_num_bo")
-            ss.rz_t_wall_mm = st.number_input(
-                "Wall thickness [mm]", 0.2, 5.0, float(ss.rz_t_wall_mm),
-                step=0.1, format="%.1f", key="_num_tw2")
+        if cs_type in ("Circular Hollow Tube", "Square Hollow Tube"):
+            ss.resizing_k_ratio = st.slider(
+                "Inner/outer ratio k_ratio  (d_in/d_out or b_in/b_out)",
+                0.30, 0.90,
+                float(ss.get("resizing_k_ratio", 0.7)),
+                step=0.05, format="%.2f",
+                help="0.7 is typical for CF tubes. Higher → thinner wall → lighter but weaker.",
+                key="_rz_kr",
+            )
         else:
-            ss.rz_b_plate_mm = st.number_input(
-                "Width b [mm]", 2.0, 80.0, float(ss.rz_b_plate_mm),
-                step=0.5, format="%.1f", key="_num_bp")
-            ss.rz_h_plate_mm = st.number_input(
-                "Height h [mm]", 0.5, 20.0, float(ss.rz_h_plate_mm),
-                step=0.1, format="%.1f", key="_num_hp")
+            ss.resizing_b_plate_m = st.number_input(
+                "Plate width b [mm]", 5.0, 80.0,
+                float(ss.get("resizing_b_plate_m", 0.012) * 1000),
+                step=1.0, format="%.1f", key="_rz_bp",
+            ) / 1000.0
 
         st.markdown("**Material**")
         mat_keys = list(MATERIALS.keys())
-        ss.rz_material = st.selectbox(
+        mat = st.selectbox(
             "Material", mat_keys,
-            index=mat_keys.index(ss.rz_material),
-            key="_sel_mat",
+            index=mat_keys.index(ss.get("resizing_material", "CF tube/rod")),
+            key="_rz_mat",
         )
-        if ss.rz_material == "Custom":
-            ss.rz_rho_custom = st.number_input(
+        ss.resizing_material = mat
+
+        if mat == "Custom":
+            ss.resizing_rho_custom = st.number_input(
                 "Density ρ [kg/m³]", 100.0, 20000.0,
-                float(ss.rz_rho_custom), step=10.0, key="_num_rho")
-            ss.rz_sigma_custom = st.number_input(
+                float(ss.get("resizing_rho_custom", 1600.0)), step=10.0, key="_rz_rho")
+            ss.resizing_sigma_custom = st.number_input(
                 "Allowable stress σ [MPa]", 1.0, 2000.0,
-                float(ss.rz_sigma_custom), step=5.0, key="_num_sig")
+                float(ss.get("resizing_sigma_custom", 600.0)), step=5.0, key="_rz_sig")
         else:
-            m = MATERIALS[ss.rz_material]
-            st.caption(
-                f"ρ = {m['rho']:.0f} kg/m³  ·  σ_allow = {m['sigma_allow_MPa']:.0f} MPa"
-            )
+            m = MATERIALS[mat]
+            st.caption(f"ρ = {m['rho']:.0f} kg/m³  ·  σ_allow = {m['sigma_allow_MPa']:.0f} MPa")
 
     with col_right:
         st.markdown("**Geometry & safety**")
-        ss.rz_D_prop_mm = st.number_input(
-            "Propeller diameter D [mm]", 50.0, 800.0,
-            float(ss.rz_D_prop_mm), step=5.0, format="%.0f", key="_num_Dp")
-        ss.rz_k_arm = st.slider(
-            "Arm length factor k_arm  (L_arm = k × D/2)",
-            1.2, 6.0, float(ss.rz_k_arm), step=0.05, format="%.2f",
-            help="k=2 → L_arm = D (tight packing); k=3 → L_arm = 1.5D (comfortable clearance).",
-            key="_sl_karm",
+
+        ss.resizing_D_prop_m = st.number_input(
+            "Propeller diameter D [m]", 0.05, 1.0,
+            float(ss.get("resizing_D_prop_m", 0.127)), step=0.005, format="%.4f",
+            help="Set automatically when a propeller is selected in R3.",
+            key="_rz_Dp",
         )
-        ss.rz_FoS_req = st.number_input(
+        ss.resizing_k_arm = st.slider(
+            "Arm length factor k_arm  (L_arm = k × D/2)",
+            1.0, 4.0, float(ss.get("resizing_k_arm", 1.2)),
+            step=0.05, format="%.2f",
+            help="k=1.2 → compact; k=2.0 → comfortable clearance.",
+            key="_rz_karm",
+        )
+        ss.resizing_FoS = st.number_input(
             "Required factor of safety FoS", 1.0, 5.0,
-            float(ss.rz_FoS_req), step=0.1, format="%.1f", key="_num_fos")
-        ss.rz_c_margin_mm = st.number_input(
+            float(ss.get("resizing_FoS", 1.5)), step=0.1, format="%.1f",
+            key="_rz_fos",
+        )
+        ss.resizing_c_margin_m = st.number_input(
             "Prop clearance margin [mm]", 0.0, 50.0,
-            float(ss.rz_c_margin_mm), step=1.0, format="%.0f", key="_num_cm")
-        ss.rz_M_body_g = st.number_input(
-            "Body / frame mass (excl. arms) [g]", 0.0, 500.0,
-            float(ss.rz_M_body_g), step=1.0, format="%.1f",
-            help="Central frame, landing gear, screws, etc.", key="_num_body")
+            float(ss.get("resizing_c_margin_m", 0.010) * 1000),
+            step=1.0, format="%.0f", key="_rz_cm",
+        ) / 1000.0
+        ss.resizing_M_struct_sizing = st.number_input(
+            "Structural mass from sizing [g]", 0.0, 2000.0,
+            float(ss.get("resizing_M_struct_sizing",
+                          ss.get("m_struct_sizing", 50.0)) * 1000),
+            step=1.0, format="%.1f",
+            help="M_body = max(0, M_struct_sizing − M_arms). Bridges from Sizing Phase.",
+            key="_rz_msz",
+        ) / 1000.0
 
     st.markdown("---")
 
     # ── Live computation ──────────────────────────────────────────────────────
-    res = _compute_and_store()
+    res = _compute_and_store(ss)
+    dims = res["dims"]
 
     c1, c2, c3, c4 = st.columns(4, gap="small")
-    c1.metric("L_arm",   f"{res['L_arm_m']*1000:.1f} mm")
-    c2.metric("m_arm",   f"{res['m_one_arm_g']:.2f} g")
-    c3.metric("M_struct",f"{res['M_struct_g']:.2f} g")
-    c4.metric("A_cross", f"{res['A']*1e6:.3f} mm²")
+    c1.metric("L_arm",    f"{res['L_arm']*1000:.1f} mm")
+    c2.metric("m_arm",    f"{res['m_one_g']:.2f} g")
+    c3.metric("M_struct", f"{res['M_struct_g']:.2f} g")
+    c4.metric("M_body",   f"{res['M_body_g']:.2f} g")
+
+    if res["M_body_g"] < 0.1:
+        st.markdown(
+            '<span class="warn-badge">⚠ M_body ≈ 0 — arms alone exceed M_struct_sizing. '
+            'Increase M_struct_sizing or reduce k_arm.</span>',
+            unsafe_allow_html=True,
+        )
 
     st.markdown("---")
 
     col_str, col_clr = st.columns([1, 1], gap="large")
 
     with col_str:
-        st.markdown("### Stress Check")
-        st.latex(r"\sigma_{root} = \frac{M_{bend} \cdot c}{I} = \frac{T_{max} \cdot L_{arm} \cdot c}{I}")
-        ok     = res["stress_ok"]
-        color  = "#16a34a" if ok else "#dc2626"
-        badge  = "converged-badge" if ok else "warn-badge"
-        symbol = "✓" if ok else "✗"
+        st.markdown("### Solved Arm Dimensions")
 
-        st.markdown(
-            f'<span class="{badge}">{symbol} FoS = {res["FoS_actual"]:.3f} '
-            f'(req ≥ {ss.rz_FoS_req:.1f})</span>',
-            unsafe_allow_html=True,
-        )
-        st.markdown(f"""
-<div style="background:#ffffff;border:1px solid #e5e7eb;border-left:3px solid {color};
-            border-radius:0 8px 8px 0;padding:10px 14px;margin-top:10px;font-size:0.83rem;">
-  <b>σ_root</b> = {res['sigma_MPa']:.3f} MPa<br>
-  <b>σ_allow</b> = {res['sigma_allow']:.0f} MPa<br>
-  <b>T_max</b> = {ss.rz_T_max_N:.3f} N &nbsp;(2 × T_hover)<br>
-  <b>I</b> = {res['I']:.4e} m⁴ &nbsp;·&nbsp; <b>c</b> = {res['c']*1000:.3f} mm
+        cs_type = ss.resizing_cross_section
+        if cs_type == "Circular Hollow Tube":
+            d_out_mm = dims.get("d_out_m", 0.0) * 1000.0
+            d_in_mm  = dims.get("d_in_m",  0.0) * 1000.0
+            t_mm     = dims.get("t_wall_m", 0.0) * 1000.0
+            st.latex(
+                r"d_{out} = \left(\frac{32\,M_{root}\,FoS}{\pi\,\sigma_{allow}"
+                r"\,(1-k^4)}\right)^{1/3}"
+            )
+            st.markdown(f"""
+<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:8px;
+            padding:12px 16px;font-size:0.87rem;margin-top:8px;">
+  d_out = <b style="color:#d97706;">{d_out_mm:.3f} mm</b><br>
+  d_in  = {d_in_mm:.3f} mm &nbsp;·&nbsp; t_wall = {t_mm:.3f} mm<br>
+  k_ratio = {ss.resizing_k_ratio:.2f} &nbsp;·&nbsp; A = {dims.get("A_m2",0)*1e6:.3f} mm²
 </div>
 """, unsafe_allow_html=True)
+
+        elif cs_type == "Square Hollow Tube":
+            b_out_mm = dims.get("b_out_m", 0.0) * 1000.0
+            b_in_mm  = dims.get("b_in_m",  0.0) * 1000.0
+            t_mm     = dims.get("t_wall_m", 0.0) * 1000.0
+            st.latex(
+                r"b_{out} = \left(\frac{6\,M_{root}\,FoS}{\sigma_{allow}"
+                r"\,(1-k^4)}\right)^{1/3}"
+            )
+            st.markdown(f"""
+<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:8px;
+            padding:12px 16px;font-size:0.87rem;margin-top:8px;">
+  b_out = <b style="color:#d97706;">{b_out_mm:.3f} mm</b><br>
+  b_in  = {b_in_mm:.3f} mm &nbsp;·&nbsp; t_wall = {t_mm:.3f} mm<br>
+  k_ratio = {ss.resizing_k_ratio:.2f} &nbsp;·&nbsp; A = {dims.get("A_m2",0)*1e6:.3f} mm²
+</div>
+""", unsafe_allow_html=True)
+
+        else:
+            h_mm = dims.get("h_m", 0.0) * 1000.0
+            b_mm = dims.get("b_m", 0.0) * 1000.0
+            st.latex(r"h = \sqrt{\frac{6\,M_{root}\,FoS}{\sigma_{allow}\,b}}")
+            st.markdown(f"""
+<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:8px;
+            padding:12px 16px;font-size:0.87rem;margin-top:8px;">
+  h = <b style="color:#d97706;">{h_mm:.3f} mm</b><br>
+  b = {b_mm:.1f} mm &nbsp;·&nbsp; A = {dims.get("A_m2",0)*1e6:.3f} mm²
+</div>
+""", unsafe_allow_html=True)
+
+        # Stress check badge
+        ok    = res["stress_ok"]
+        badge = "converged-badge" if ok else "warn-badge"
+        sym   = "✓" if ok else "✗"
+        st.markdown(
+            f'<span class="{badge}">{sym} FoS_actual = {res["FoS_actual"]:.3f} '
+            f'(req ≥ {ss.resizing_FoS:.1f})  ·  '
+            f'σ_root = {res["sigma_root_MPa"]:.3f} MPa</span>',
+            unsafe_allow_html=True,
+        )
 
     with col_clr:
         st.markdown("### Propeller Clearance")
-        st.latex(r"d_{between} = 2 L_{arm} \sin\!\left(\frac{\pi}{n_{motors}}\right)")
+        st.latex(r"d_{between} = 2\,L_{arm}\,\sin\!\left(\frac{\pi}{n}\right)")
         clr_ok = res["clear_ok"]
         cbadge = "converged-badge" if clr_ok else "warn-badge"
         csym   = "✓" if clr_ok else "✗"
-
+        D_prop_mm = ss.resizing_D_prop_m * 1000.0
+        c_margin_mm = ss.resizing_c_margin_m * 1000.0
         st.markdown(
-            f'<span class="{cbadge}">{csym} d_between = {res["d_between"]*1000:.1f} mm'
-            f' (need > {ss.rz_D_prop_mm + ss.rz_c_margin_mm:.0f} mm)</span>',
+            f'<span class="{cbadge}">{csym} d_between = {res["d_between"]*1000:.1f} mm '
+            f'(need > {D_prop_mm + c_margin_mm:.1f} mm)</span>',
             unsafe_allow_html=True,
         )
         st.markdown(f"""
-<div style="background:#ffffff;border:1px solid #e5e7eb;border-left:3px solid {"#16a34a" if clr_ok else "#dc2626"};
+<div style="background:#ffffff;border:1px solid #e5e7eb;
+            border-left:3px solid {"#16a34a" if clr_ok else "#dc2626"};
             border-radius:0 8px 8px 0;padding:10px 14px;margin-top:10px;font-size:0.83rem;">
-  <b>d_between</b> = {res['d_between']*1000:.1f} mm<br>
-  <b>D_prop</b> = {ss.rz_D_prop_mm:.0f} mm &nbsp;+&nbsp;
-  <b>margin</b> = {ss.rz_c_margin_mm:.0f} mm<br>
-  <b>L_arm</b> = {res['L_arm_m']*1000:.1f} mm &nbsp;·&nbsp;
-  <b>n_motors</b> = {ss.n_motors}
+  F_max = {res["F_max"]:.3f} N &nbsp;·&nbsp;
+  M_root = {res["M_root"]*1000:.2f} N·mm<br>
+  d_between = {res["d_between"]*1000:.1f} mm<br>
+  D_prop + margin = {D_prop_mm + c_margin_mm:.1f} mm
 </div>
 """, unsafe_allow_html=True)
 
-    # Material reference
+    # Material reference table
     with st.expander("Material reference"):
         import pandas as pd
         df = pd.DataFrame([

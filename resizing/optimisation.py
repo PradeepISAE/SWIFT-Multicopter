@@ -1,105 +1,128 @@
 """
-SLSQP optimisation: minimise MTOW by tuning arm geometry.
+SLSQP optimisation — SWIFT Resizing Phase.
 
-Design variables x = [k_arm, dim1_mm, dim2_mm]
-  Circular tube:  dim1 = d_outer, dim2 = t_wall
-  Square tube:    dim1 = b_outer, dim2 = t_wall
-  Flat plate:     dim1 = width b, dim2 = height h
+Design variables: x = [k_arm, k_ratio]
+  k_arm   = arm length factor  (L_arm = k_arm × D_prop/2)
+  k_ratio = inner/outer ratio  (d_in/d_out  or  b_in/b_out)
+
+Objective:  minimise MTOW(k_arm, k_ratio)
+
+Constraints (all ≥ 0):
+  g1: σ_allow/FoS − σ_root ≥ 0          (structural — Pollet 2024 Eq. 3.23)
+  g2: d_between − D_prop − c_margin ≥ 0 (prop clearance)
+  g3: T_100pct×n − (T/W)_req × MTOW×g ≥ 0 (thrust-to-weight)
+  g4: M_struct_sizing − M_arms ≥ 0      (positive body mass)
+
+Reference: Pollet (2024) PhD Thesis §3.4.
 """
 import numpy as np
 from scipy.optimize import minimize
 
-from .structure_resizing import section_properties, stress_check, arm_mass_one, prop_clearance
+from .structure_resizing import (
+    compute_structural_sizing, compute_F_max, prop_clearance, solve_arm,
+)
 from .convergence_resizing import run_resizing
 
 
-def _build_dims_m(cs_type, dim1_mm, dim2_mm):
-    if cs_type == "Circular tube":
-        return {"d_outer": dim1_mm / 1000.0, "t_wall": dim2_mm / 1000.0}
-    if cs_type == "Square tube":
-        return {"b_outer": dim1_mm / 1000.0, "t_wall": dim2_mm / 1000.0}
-    return {"b": dim1_mm / 1000.0, "h": dim2_mm / 1000.0}
-
-
-def _mtow_from_x(x, cs_type, rho, sigma_allow_MPa,
-                 T_max_N, D_prop_m, base_params):
-    k_arm, dim1, dim2 = x
-    L_arm   = k_arm * D_prop_m / 2.0
-    dims_m  = _build_dims_m(cs_type, dim1, dim2)
-    _, _, A = section_properties(cs_type, dims_m)
-
-    m_one_arm   = arm_mass_one(rho, A, L_arm)
-    M_arms      = base_params["n_motors"] * m_one_arm
-    M_struct_sz = base_params["M_struct_sizing"]
-    M_body      = max(0.0, M_struct_sz - M_arms)
-
+def _mtow_from_x(x, base_params):
+    """Objective: run full convergence loop for candidate [k_arm, k_ratio]."""
+    k_arm, k_ratio = x
     p = dict(base_params)
-    p["M_struct_fixed"] = M_arms + M_body
-    return run_resizing(p)["M_TO"]
+    p["k_arm"]   = k_arm
+    p["k_ratio"] = k_ratio
+    try:
+        return run_resizing(p)["M_TO"]
+    except Exception:
+        return 1e6  # large penalty on numerical failure
 
 
-def run_optimisation(base_params: dict, cs_type: str,
-                     rho: float, sigma_allow_MPa: float,
-                     T_max_N: float, D_prop_m: float,
-                     x0: list, bounds: list,
-                     FoS_req: float = 1.5,
-                     c_margin_m: float = 0.010) -> tuple:
-    """Run SLSQP optimisation.
+def run_optimisation(base_params: dict,
+                     T_100pct_N: float,
+                     TW_required: float = 2.0,
+                     c_margin_m: float = 0.010,
+                     x0: list = None,
+                     bounds: list = None) -> tuple:
+    """Run SLSQP optimisation over [k_arm, k_ratio].
 
-    base_params: dict accepted by run_resizing(), plus 'M_struct_sizing' and 'T_50pct_N'.
-    x0:     initial [k_arm, dim1_mm, dim2_mm]
-    bounds: [(lo,hi), (lo,hi), (lo,hi)]
+    base_params: full params dict accepted by run_resizing().
+                 Must also contain: D_prop_m, cs_type, rho, sigma_allow_Pa,
+                                    FoS, n_motors, M_struct_sizing_kg, a_TO_ms2.
+    T_100pct_N:  max thrust per motor at 100% throttle [N].
+    TW_required: required thrust-to-weight ratio [-].
     Returns (OptimizeResult, history_list).
-    history_list elements: {'iter', 'k_arm', 'dim1', 'dim2', 'MTOW'}
     """
+    D_prop_m       = base_params["D_prop_m"]
+    n_motors       = int(base_params["n_motors"])
+    sigma_allow_Pa = base_params["sigma_allow_Pa"]
+    FoS_req        = base_params["FoS"]
+    a_TO           = base_params["a_TO_ms2"]
+    M_struct_sz    = base_params["M_struct_sizing_kg"]
+    cs_type        = base_params["cs_type"]
+    k_ratio_init   = base_params.get("k_ratio", 0.7)
+    k_arm_init     = base_params.get("k_arm", 1.2)
+
+    if x0 is None:
+        x0 = [k_arm_init, k_ratio_init]
+    if bounds is None:
+        bounds = [(1.0, 3.0), (0.3, 0.90)]
+
     history = []
 
     def objective(x):
-        return _mtow_from_x(x, cs_type, rho, sigma_allow_MPa,
-                             T_max_N, D_prop_m, base_params)
+        return _mtow_from_x(x, base_params)
 
-    def g_structural(x):
-        k_arm, dim1, dim2 = x
-        L_arm  = k_arm * D_prop_m / 2.0
-        dims_m = _build_dims_m(cs_type, dim1, dim2)
-        I, c, _ = section_properties(cs_type, dims_m)
-        _, FoS_actual, _ = stress_check(T_max_N, L_arm, I, c,
-                                         sigma_allow_MPa, FoS_req)
-        return FoS_actual - FoS_req
+    def g1_structural(x):
+        """FoS_actual − FoS_req ≥ 0."""
+        k_arm, k_ratio = x
+        L_arm   = k_arm * D_prop_m / 2.0
+        F_max   = compute_F_max(
+            _mtow_from_x(x, base_params), a_TO, n_motors)
+        M_root  = F_max * L_arm
+        dims    = solve_arm(cs_type, M_root, sigma_allow_Pa, FoS_req,
+                            k_ratio, base_params.get("b_plate_m", 0.012))
+        return dims["FoS_actual"] - FoS_req
 
-    def g_clearance(x):
-        k_arm, dim1, dim2 = x
+    def g2_clearance(x):
+        """d_between − D_prop − margin ≥ 0."""
+        k_arm, _k = x
         L_arm = k_arm * D_prop_m / 2.0
-        d_between, _ = prop_clearance(L_arm, D_prop_m,
-                                       base_params["n_motors"], c_margin_m)
+        d_between, _ = prop_clearance(L_arm, D_prop_m, n_motors, c_margin_m)
         return d_between - (D_prop_m + c_margin_m)
 
-    def g_feasibility(x):
-        k_arm, dim1, dim2 = x
-        L_arm  = k_arm * D_prop_m / 2.0
-        dims_m = _build_dims_m(cs_type, dim1, dim2)
-        _, _, A = section_properties(cs_type, dims_m)
-        m_one  = arm_mass_one(rho, A, L_arm)
-        M_arms = base_params["n_motors"] * m_one
-        M_body = max(0.0, base_params["M_struct_sizing"] - M_arms)
-        p = dict(base_params)
-        p["M_struct_fixed"] = M_arms + M_body
-        MTOW = run_resizing(p)["M_TO"]
-        T_50_N = base_params.get("T_50pct_N", 0.0)
-        return T_50_N * base_params["n_motors"] - MTOW * 9.81 * 2.0
+    def g3_thrust_weight(x):
+        """T_100pct×n / (MTOW×g) − TW_req ≥ 0."""
+        MTOW = _mtow_from_x(x, base_params)
+        tw   = (T_100pct_N * n_motors) / (MTOW * 9.81) if MTOW > 0 else 0.0
+        return tw - TW_required
+
+    def g4_positive_body(x):
+        """M_struct_sizing − M_arms ≥ 0."""
+        k_arm, k_ratio = x
+        L_arm   = k_arm * D_prop_m / 2.0
+        F_max   = compute_F_max(
+            _mtow_from_x(x, base_params), a_TO, n_motors)
+        M_root  = F_max * L_arm
+        dims    = solve_arm(cs_type, M_root, sigma_allow_Pa, FoS_req,
+                            k_ratio, base_params.get("b_plate_m", 0.012))
+        rho     = base_params["rho"]
+        m_one   = rho * dims["A_m2"] * L_arm
+        M_arms  = n_motors * m_one
+        return M_struct_sz - M_arms
 
     def callback(x):
-        f = objective(x)
+        f = _mtow_from_x(x, base_params)
         history.append({
-            "iter":  len(history) + 1,
-            "k_arm": x[0], "dim1": x[1], "dim2": x[2],
-            "MTOW":  f,
+            "iter":    len(history) + 1,
+            "k_arm":   float(x[0]),
+            "k_ratio": float(x[1]),
+            "MTOW":    float(f),
         })
 
     constraints = [
-        {"type": "ineq", "fun": g_structural},
-        {"type": "ineq", "fun": g_clearance},
-        {"type": "ineq", "fun": g_feasibility},
+        {"type": "ineq", "fun": g1_structural},
+        {"type": "ineq", "fun": g2_clearance},
+        {"type": "ineq", "fun": g3_thrust_weight},
+        {"type": "ineq", "fun": g4_positive_body},
     ]
 
     res = minimize(
@@ -108,6 +131,6 @@ def run_optimisation(base_params: dict, cs_type: str,
         bounds=bounds,
         constraints=constraints,
         callback=callback,
-        options={"maxiter": 100, "ftol": 1e-6, "disp": False},
+        options={"maxiter": 200, "ftol": 1e-6, "disp": False},
     )
     return res, history
