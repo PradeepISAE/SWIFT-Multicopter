@@ -36,6 +36,23 @@ def _default_segments():
     }
 
 
+def _eq_ref():
+    with st.expander("Equations & References"):
+        st.markdown("**Throttle factors**")
+        st.latex(r"k_{TO} = 1 + \frac{a_{TO}}{g}")
+        st.latex(r"k_{land} \in (0,\,1] \quad \text{(partial throttle during descent)}")
+        st.markdown("**Segment power**")
+        st.latex(r"P_{hover} = \frac{MTOW \cdot g \cdot 1000}{PL_{50\%}} \quad \text{[W, all motors]}")
+        st.latex(r"P_{TO} = k_{TO} \cdot P_{hover}, \qquad P_{land} = k_{land} \cdot P_{hover}")
+        st.markdown("**Segment energy**")
+        st.latex(r"E_k = P_k \cdot \frac{t_k}{60} \quad \text{[Wh]}, \quad t_k \text{ in minutes}")
+        st.latex(r"E_{total} = \sum_k E_k + E_{cruise} \quad \text{[Wh]}")
+        st.caption(
+            "References: Pollet (2024) PhD Thesis §3.6; "
+            "Tyan et al. (2017) 'Improving Reliability of UAV Preliminary Sizing' §3.2"
+        )
+
+
 def _mission_profile_chart(segs: dict) -> plt.Figure:
     """Draw altitude vs time mission profile."""
     fig, ax = plt.subplots(figsize=(8, 3), dpi=110)
@@ -135,6 +152,8 @@ Define each flight segment. <b>Cruise</b> activates the <b>Aerodynamics tab</b> 
 computation. Takeoff, Hover, and Land are always active.
 </div>
 """, unsafe_allow_html=True)
+
+    _eq_ref()
 
     col_inputs, col_chart = st.columns([1, 1], gap="large")
 
@@ -267,3 +286,74 @@ computation. Takeoff, Hover, and Land are always active.
                 ss.get("resizing_config", "Quad X")),
             key="_rz_cfg",
         )
+
+    # ── Operating altitude ────────────────────────────────────────────────────
+    st.markdown("---")
+    st.markdown("#### Operating Altitude (ISA)")
+
+    st.latex(
+        r"\rho_{alt} = 1.225 \times \left(1 - 2.2558 \times 10^{-5} \cdot h"
+        r"\right)^{4.2559} \quad [\text{kg/m}^3]"
+    )
+
+    col_alt, col_alt_out = st.columns(2)
+
+    with col_alt:
+        altitude_m = st.number_input(
+            "Operating altitude h [m]",
+            min_value=0,
+            max_value=11000,
+            value=int(ss.get("resizing_altitude_m", 0)),
+            step=50,
+            help=(
+                "Altitude at which the UAV operates. "
+                "Higher altitude = lower air density = more power needed "
+                "for the same thrust. Sea level = 0 m."
+            ),
+            key="r_altitude_m",
+        )
+        ss["resizing_altitude_m"] = float(altitude_m)
+
+    with col_alt_out:
+        from resizing.mission_resizing import isa_density, altitude_power_correction
+        rho_alt = isa_density(altitude_m)
+        k_alt   = altitude_power_correction(altitude_m)
+        ss["resizing_rho_alt"] = rho_alt
+        ss["resizing_k_alt"]   = k_alt
+        st.metric(
+            "Air density ρ",
+            f"{rho_alt:.4f} kg/m³",
+            delta=f"{((rho_alt/1.225)-1)*100:.1f}% vs SL",
+            delta_color="inverse",
+            help="ISA density at operating altitude",
+        )
+        st.metric(
+            "Power correction factor",
+            f"{k_alt:.4f}",
+            delta=f"+{(k_alt-1)*100:.1f}% more power vs SL",
+            delta_color="inverse",
+            help="P_alt = P_SL × this factor",
+        )
+
+    with st.expander("Altitude correction reference table", expanded=False):
+        import pandas as pd
+        altitudes = [0, 500, 1000, 1500, 2000, 2500, 3000, 4000, 5000]
+        table_data = []
+        for h in altitudes:
+            rho = isa_density(h)
+            k   = altitude_power_correction(h)
+            table_data.append({
+                "Altitude [m]":               h,
+                "ρ [kg/m³]":                  round(rho, 4),
+                "ρ/ρ_SL [-]":                 round(rho / 1.225, 4),
+                "Power factor √(ρ_SL/ρ) [-]": round(k, 4),
+                "Extra power [%]":             round((k - 1) * 100, 1),
+            })
+        st.dataframe(pd.DataFrame(table_data), use_container_width=True,
+                     hide_index=True)
+
+    st.caption(
+        "Source: ICAO Standard Atmosphere (ISA). "
+        "Power correction from actuator disc momentum theory — "
+        "Pollet (2024), §3.3.2."
+    )

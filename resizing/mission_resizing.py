@@ -6,17 +6,61 @@ Energy per segment: E_k = P_k × t_k  [Wh]
 
 Reference: Pollet (2024) PhD Thesis §3.6.
 """
+import math
 
 
-def compute_P_motors(MTOW_kg: float, PL_50pct_gW: float, n_motors: int) -> float:
+def isa_density(altitude_m: float) -> float:
+    """ISA air density at altitude [m]. Valid for troposphere (0–11 000 m).
+
+    rho = 1.225 × (1 − 2.2558e-5 × h)^4.2559
+
+    Reference: ICAO Standard Atmosphere.
+    Returns: air density [kg/m³]
+    """
+    h = min(max(0.0, float(altitude_m)), 11000.0)
+    return 1.225 * (1.0 - 2.2558e-5 * h) ** 4.2559
+
+
+def altitude_power_correction(altitude_m: float) -> float:
+    """Power correction factor for altitude [-].
+
+    From actuator disc / momentum theory: P_hover ∝ 1/√ρ
+      P_alt = P_SL × √(ρ_SL / ρ_alt)
+      correction = √(ρ_SL / ρ_alt)  ≥ 1.0
+
+    Reference: Pollet (2024) §3.3.2 — momentum theory.
+    Returns: correction factor (≥ 1.0, increases with altitude)
+    """
+    rho_alt = isa_density(altitude_m)
+    return math.sqrt(1.225 / max(rho_alt, 1e-6))
+
+
+def corrected_power_loading(pl_sl_gW: float, altitude_m: float) -> float:
+    """Altitude-corrected power loading [g/W].
+
+    PL_alt = PL_SL × √(ρ_alt / ρ_SL)
+    Same thrust at altitude requires more power → effective PL decreases.
+
+    Reference: actuator disc momentum theory.
+    Returns: altitude-corrected power loading [g/W]
+    """
+    rho_alt = isa_density(altitude_m)
+    return pl_sl_gW * math.sqrt(rho_alt / 1.225)
+
+
+def compute_P_motors(MTOW_kg: float, PL_50pct_gW: float, n_motors: int,
+                     altitude_m: float = 0.0) -> float:
     """Total motor power at hover condition [W].
 
     T_motor = MTOW / n_motors [kg] × 1000 [g/kg]
-    P_motor = T_g / PL   [W]
-    P_total = n × P_motor
+    P_motor_SL = T_g / PL   [W]
+    P_motor_alt = P_motor_SL × √(ρ_SL / ρ_alt)   (altitude correction)
+    P_total = n × P_motor_alt
     """
     T_motor_g = MTOW_kg * 1000.0 / n_motors
     P_motor_W = T_motor_g / PL_50pct_gW if PL_50pct_gW > 0 else 0.0
+    if altitude_m > 0.0:
+        P_motor_W *= altitude_power_correction(altitude_m)
     return n_motors * P_motor_W
 
 
@@ -32,7 +76,8 @@ def segment_energy(P_motors_W: float, P_avi_W: float, P_pay_W: float,
 
 def compute_mission_energy(MTOW_kg: float, PL_50pct_gW: float, n_motors: int,
                            P_avi_W: float, P_pay_W: float,
-                           segments: dict, E_cruise_Wh: float = 0.0) -> dict:
+                           segments: dict, E_cruise_Wh: float = 0.0,
+                           altitude_m: float = 0.0) -> dict:
     """Compute total mission energy from all active segments.
 
     segments format:
@@ -45,7 +90,7 @@ def compute_mission_energy(MTOW_kg: float, PL_50pct_gW: float, n_motors: int,
       }
     Cruise energy comes pre-computed from Aerodynamics Tab.
     """
-    P_motors_W = compute_P_motors(MTOW_kg, PL_50pct_gW, n_motors)
+    P_motors_W = compute_P_motors(MTOW_kg, PL_50pct_gW, n_motors, altitude_m)
     E = {}
 
     seg = segments.get("takeoff", {})

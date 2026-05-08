@@ -60,6 +60,8 @@ def run_resizing(params: dict) -> dict:
     FoS            = params["FoS"]
     M_struct_sz    = params["M_struct_sizing_kg"]
 
+    altitude_m = float(params.get("altitude_m", 0.0))
+
     MTOW      = m_pay / MF_pay
     history   = [MTOW]
     converged = False
@@ -79,6 +81,7 @@ def run_resizing(params: dict) -> dict:
         # ── Mission energy ────────────────────────────────────────────────
         mission_out = compute_mission_energy(
             MTOW, PL, n_motors, P_avi, P_pay, segments, E_cruise,
+            altitude_m=altitude_m,
         )
         E_total = mission_out["E_total_Wh"]
 

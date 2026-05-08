@@ -27,12 +27,32 @@ _SEG_COLORS = {"takeoff": "#d97706", "climb": "#3b82f6", "cruise": "#10b981",
                "hover": "#6b7280", "land": "#8b5cf6"}
 
 
+def _eq_ref():
+    with st.expander("Equations & References"):
+        st.markdown("**Battery mass from mission energy**")
+        st.latex(r"M_{batt} = \frac{E_{total}}{SED \cdot DoD \cdot \eta_{elec}} \quad \text{[kg]}")
+        st.markdown("**Capacity requirements**")
+        st.latex(r"C_{req} = \frac{E_{total} \times 1000}{V_{batt}} \quad \text{[mAh]}")
+        st.latex(r"C_{target} = 1.15 \times C_{req} \quad \text{(+15\% design margin)}")
+        st.markdown("**Specific energy density (from datasheet)**")
+        st.latex(r"SED = \frac{C_{mAh} \times n_s \times V_{cell}}{m_{batt,g}} \quad \text{[Wh/kg]}")
+        st.markdown("**Battery pack voltage**")
+        st.latex(r"V_{batt} = n_s \times V_{cell} \quad \text{[V]}")
+        st.caption(
+            "References: Pollet (2024) PhD Thesis §3.6; "
+            "Tyan et al. (2017) §3.4; "
+            "DoD = Depth of Discharge; η = overall electrical efficiency"
+        )
+
+
 def render():
     st.markdown('<div class="section-tag">Resizing Phase · Battery</div>',
                 unsafe_allow_html=True)
     st.markdown("## R5 · Battery Selection")
 
     ss = st.session_state
+
+    _eq_ref()
 
     if "resizing_batteries" not in ss:
         ss.resizing_batteries = [dict(r) for r in _DEFAULT_BATTERIES]
@@ -66,7 +86,9 @@ def render():
     E_cruise = float(ss.get("resizing_E_cruise_Wh", 0.0))
 
     if segs and PL > 0 and MTOW > 0:
-        m_out = compute_mission_energy(MTOW, PL, n, P_avi, P_pay, segs, E_cruise)
+        _altitude_m = float(ss.get("resizing_altitude_m", 0.0))
+        m_out = compute_mission_energy(MTOW, PL, n, P_avi, P_pay, segs, E_cruise,
+                                       altitude_m=_altitude_m)
         E_segs = m_out["E_segments"]
         E_total = m_out["E_total_Wh"]
 
@@ -208,3 +230,27 @@ def render():
   These values are passed to the resizing convergence loop.
 </div>
 """, unsafe_allow_html=True)
+
+    # ── Altitude correction display ───────────────────────────────────────────
+    _alt_m = float(ss.get("resizing_altitude_m", 0.0))
+    _k_alt = float(ss.get("resizing_k_alt",      1.0))
+    _rho_a = float(ss.get("resizing_rho_alt",    1.225))
+
+    if _alt_m > 0:
+        st.info(
+            f"**Altitude correction applied ({_alt_m:.0f} m)**\n\n"
+            f"Air density at {_alt_m:.0f} m: **{_rho_a:.4f} kg/m³** "
+            f"(vs 1.225 kg/m³ at sea level)\n\n"
+            f"Power correction factor: **{_k_alt:.4f}** → "
+            f"motors need **{(_k_alt-1)*100:.1f}% more power** than sea-level datasheet values\n\n"
+            f"P_alt = P_SL × {_k_alt:.4f}   →   mission energy is increased accordingly"
+        )
+        st.latex(
+            r"P_{alt} = P_{SL} \times \sqrt{\frac{\rho_{SL}}{\rho_{alt}}} = P_{SL} \times "
+            + f"{_k_alt:.4f}"
+        )
+    else:
+        st.success(
+            "Operating at sea level (h = 0 m). "
+            "No altitude correction applied. Motor datasheet values used directly."
+        )
