@@ -155,20 +155,31 @@ for the motor you want to use.
     c3.metric("T_100% / motor",  f"{T_100pct_g:.0f} g")
     c4.metric("D_prop",          f"{D_prop_m*1000:.0f} mm" if D_prop_m > 0 else "—")
 
-    # Feasibility check
+    # Feasibility checks
     if ss.get("sizing_done", False) or ss.get("resizing_done", False):
-        MTOW_kg = ss.get("resizing_MTOW_converged",
-                  ss.get("mtow_converged", 0.5))
-        T_50pct_g = float(m_motor.get("T_50pct_g", 0) or 0)
+        MTOW_kg   = ss.get("resizing_MTOW_converged", ss.get("mtow_converged", 0.5))
+        T_50pct_g = float(m_motor.get("T_50pct_g",  0) or 0)
         if MTOW_kg > 0 and T_50pct_g > 0:
-            TW_actual, margin_N, ok = feasibility_check(T_50pct_g, n, MTOW_kg, 2.0)
-            badge = "converged-badge" if ok else "warn-badge"
-            sym   = "✓" if ok else "✗"
-            st.markdown(
-                f'<span class="{badge}">{sym} T/W at 50% throttle = {TW_actual:.2f} '
-                f'(need ≥ 2.0)  ·  margin = {margin_N:.2f} N</span>',
-                unsafe_allow_html=True,
-            )
+            fc = feasibility_check(T_50pct_g, T_100pct_g, n, MTOW_kg, TW_req=2.0)
+            MTOW_g = MTOW_kg * 1000.0
+
+            b1 = "converged-badge" if fc["check1_ok"] else "warn-badge"
+            b2 = "converged-badge" if fc["check2_ok"] else "warn-badge"
+            b3 = "converged-badge" if fc["check3_ok"] else "warn-badge"
+            s1, s2, s3 = ("✓" if fc[k] else "✗" for k in ("check1_ok","check2_ok","check3_ok"))
+            sign = "+" if fc["delta_T_g"] >= 0 else ""
+
+            st.markdown(f"""
+<div style="display:flex;flex-direction:column;gap:6px;margin-top:4px;">
+  <span class="{b1}">{s1} Check 1 — Hover at 50% throttle:
+    T_50% = {T_50pct_g:.0f} g ≥ T_hover/motor = {MTOW_g:.0f}/{n} = {fc["T_hover_per_motor_g"]:.1f} g</span>
+  <span class="{b2}">{s2} Check 2 — T/W at 100% (all motors):
+    TW = {fc["T_total_100pct_g"]:.0f} g / {MTOW_g:.0f} g = {fc["TW_actual"]:.2f} (need ≥ 2.0)</span>
+  <span class="{b3}">{s3} Check 3 — Thrust margin:
+    {T_100pct_g:.0f} × {n} − {MTOW_g:.0f} × 2.0 = {sign}{fc["delta_T_g"]:.1f} g
+    ({sign}{fc["delta_T_g"]/1000:.3f} kg)</span>
+</div>
+""", unsafe_allow_html=True)
 
     # Summary card
     st.markdown(f"""

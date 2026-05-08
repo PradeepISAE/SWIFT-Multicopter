@@ -127,15 +127,45 @@ def propulsion_mass(n_motors: int, m_motor_g: float,
     return n_motors * (m_motor_g + m_prop_g + m_esc_g) / 1000.0
 
 
-def feasibility_check(T_50pct_g_per_motor: float,
+def feasibility_check(T_50pct_g: float, T_100pct_g: float,
                       n_motors: int, MTOW_kg: float,
-                      TW_req: float = 2.0) -> tuple:
-    """Check T/W ≥ TW_req.
+                      TW_req: float = 2.0) -> dict:
+    """Three propulsion feasibility checks (all use combined thrust of ALL motors).
 
-    Returns (TW_actual, margin_N, passed).
+    Check 1 — Hover at 50% throttle (per-motor comparison):
+        T_hover_per_motor = MTOW_g / n_motors
+        PASS if T_50pct_g >= T_hover_per_motor
+
+    Check 2 — T/W ratio using 100% thrust combined:
+        TW_actual = (T_100pct_g × n) / MTOW_g
+        PASS if TW_actual >= TW_req
+
+    Check 3 — Thrust margin [g]:
+        delta_T_g = T_100pct_g × n − MTOW_g × TW_req
+        Positive = surplus, Negative = deficit
     """
-    T_total_N  = T_50pct_g_per_motor / 1000.0 * 9.81 * n_motors
-    W_N        = MTOW_kg * 9.81
-    TW_actual  = T_total_N / W_N if W_N > 0 else 0.0
-    margin_N   = T_total_N - TW_req * W_N
-    return TW_actual, margin_N, margin_N >= 0.0
+    MTOW_g = MTOW_kg * 1000.0
+
+    # Check 1
+    T_hover_per_motor_g = MTOW_g / n_motors if n_motors > 0 else 0.0
+    check1_ok = T_50pct_g >= T_hover_per_motor_g
+
+    # Check 2
+    T_total_100pct_g = T_100pct_g * n_motors
+    TW_actual = T_total_100pct_g / MTOW_g if MTOW_g > 0 else 0.0
+    check2_ok = TW_actual >= TW_req
+
+    # Check 3
+    delta_T_g = T_total_100pct_g - MTOW_g * TW_req
+    check3_ok = delta_T_g >= 0.0
+
+    return {
+        "T_hover_per_motor_g": T_hover_per_motor_g,
+        "check1_ok":           check1_ok,
+        "TW_actual":           TW_actual,
+        "T_total_100pct_g":    T_total_100pct_g,
+        "check2_ok":           check2_ok,
+        "delta_T_g":           delta_T_g,
+        "check3_ok":           check3_ok,
+        "all_ok":              check1_ok and check2_ok and check3_ok,
+    }
